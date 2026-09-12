@@ -1,0 +1,13 @@
+# Variables de entorno con credenciales - nunca se sube a GitHub
+.env
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Volúmenes/datos locales de Docker (si algún día los generas fuera de un volumen nombrado)
+mysql-data/
+
+# Editores
+.vscode/
+.idea/

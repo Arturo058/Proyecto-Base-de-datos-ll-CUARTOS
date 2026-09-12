@@ -1,0 +1,93 @@
+version: "3.9"
+
+# ==============================================================================
+# Sistema de Información - Renta de Cuartos (v2)
+# Un único punto de entrada público (puerto 80). Adminer se sirve bajo
+# /adminer/ mediante proxy inverso de Apache; MySQL nunca se publica.
+# ==============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Servicio 1: Motor de Base de Datos (sin puerto publicado al host)
+  # ---------------------------------------------------------------------------
+  mi_gestor_bd:
+    image: mysql:8.0
+    container_name: mi_gestor_bd
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD}"
+      MYSQL_DATABASE: renta_cuartos_db
+    command: >
+      --max-connections=20
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    networks:
+      - red_interna
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p$${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Servicio 2: Servidor Web / Aplicación PHP + Proxy inverso hacia Adminer
+  # ---------------------------------------------------------------------------
+  pagina_web:
+    image: php:8.2-apache
+    container_name: pagina_web
+    restart: always
+    depends_on:
+      mi_gestor_bd:
+        condition: service_healthy
+      interfaz_adminer:
+        condition: service_started
+    environment:
+      # Se usa exclusivamente en el servidor (módulo de Respaldo) para
+      # ejecutar mysqldump; nunca se envía al navegador del usuario.
+      DB_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-R00t_S3guro_Cu4rtos_2026!}"
+    # Instala mysqldump (cliente de MySQL) para el módulo de Respaldo,
+    # habilita mysqli, habilita el proxy inverso hacia Adminer y arranca Apache.
+    command: >
+      bash -c "
+        apt-get update &&
+        apt-get install -y --no-install-recommends default-mysql-client &&
+        rm -rf /var/lib/apt/lists/* &&
+        docker-php-ext-install mysqli &&
+        docker-php-ext-enable mysqli &&
+        a2enmod proxy proxy_http headers &&
+        cp /var/www/html/apache-config/adminer-proxy.conf /etc/apache2/conf-enabled/adminer-proxy.conf &&
+        apache2-foreground
+      "
+    volumes:
+      - ./:/var/www/html
+    ports:
+      - "80:80"
+    networks:
+      - red_interna
+
+  # ---------------------------------------------------------------------------
+  # Servicio 3: Interfaz de Auditoría - Adminer
+  # Sin "ports": solo accesible dentro de red_interna, vía proxy en /adminer/.
+  # ---------------------------------------------------------------------------
+  interfaz_adminer:
+    image: adminer:latest
+    container_name: interfaz_adminer
+    restart: always
+    depends_on:
+      mi_gestor_bd:
+        condition: service_healthy
+    networks:
+      - red_interna
+
+networks:
+  red_interna:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local
