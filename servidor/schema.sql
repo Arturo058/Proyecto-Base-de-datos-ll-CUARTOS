@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS usuarios (
 -- Admin de prueba -> usuario: admin_cuartos | contraseña: Admin123!
 INSERT INTO usuarios (username, password_hash, rol)
 VALUES ('admin_cuartos', '$2b$12$rIbJZ7PrGGWDNQVDUyTHW.6vdErp.4lI7dYZmQYhaP4D/vFv2ZyAe', 'admin')
+ON DUPLICATE KEY UPDATE username = username;        
+
+-- Admin adicional -> usuario: miguel_admin | contraseña: Miguel2026!
+INSERT INTO usuarios (username, password_hash, rol)
+VALUES ('miguel_admin', '$2b$12$4joOBmhHW7gIWxSkXDtdUeoyVsHTrxsNtsDeVCGNKtc2hswFKjdVC', 'admin')
 ON DUPLICATE KEY UPDATE username = username;
 
 -- Inquilino de prueba -> usuario: inquilino_101 | contraseña: Inquilino123!
@@ -130,9 +135,29 @@ FROM inquilinos i JOIN usuarios u ON u.id = i.usuario_id
 WHERE u.username = 'inquilino_101'
 LIMIT 1;
 
+
+-- ------------------------------------------------------------------------------
+-- Tabla: pagos_renta 
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pagos_renta (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    inquilino_id INT NOT NULL,
+    cuarto_id INT NOT NULL,
+    monto_pagado DECIMAL(10,2) NOT NULL,
+    mes_cobertura VARCHAR(20) NOT NULL,
+    fecha_pago TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    metodo_pago ENUM('Efectivo', 'Transferencia', 'Deposito') NOT NULL,
+    estado_pago ENUM('Completado', 'Pendiente') DEFAULT 'Completado',
+    CONSTRAINT fk_pago_inquilino FOREIGN KEY (inquilino_id) REFERENCES inquilinos(inquilino_id) ON DELETE CASCADE,
+    CONSTRAINT fk_pago_cuarto FOREIGN KEY (cuarto_id) REFERENCES cuartos(cuarto_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
 -- ------------------------------------------------------------------------------
 -- Seguridad: Principio de Menor Privilegio
 -- ------------------------------------------------------------------------------
 CREATE USER IF NOT EXISTS 'web_user'@'%' IDENTIFIED BY 'CuartosSeguros2026!';
 GRANT SELECT, INSERT, UPDATE, DELETE ON renta_cuartos_db.* TO 'web_user'@'%';
 FLUSH PRIVILEGES;
+
+

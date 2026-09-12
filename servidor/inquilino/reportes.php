@@ -40,7 +40,6 @@ if ($mi_id > 0 && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'
     if ($_POST['accion'] === 'cancelar_reporte') {
         $reporte_id = (int)($_POST['reporte_id'] ?? 0);
         if ($reporte_id > 0) {
-            // La condición inquilino_id/estado impide cancelar reportes ajenos o ya atendidos.
             $stmt = mysqli_prepare($conn, "UPDATE reportes_mantenimiento SET estado = 'Cancelado' WHERE reporte_id = ? AND inquilino_id = ? AND estado = 'Pendiente'");
             mysqli_stmt_bind_param($stmt, 'ii', $reporte_id, $mi_id);
             mysqli_stmt_execute($stmt);
@@ -70,10 +69,10 @@ require __DIR__ . '/../includes/layout_top.php';
 <?php if ($form_success !== ''): ?><div class="alert alert-success py-2"><?= htmlspecialchars($form_success) ?></div><?php endif; ?>
 
 <div class="d-flex justify-content-end mb-3">
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNuevoReporte">➕ Dar de Alta</button>
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#modalNuevoReporte" style="background-color: #3b82f6; border-color: #3b82f6;">➕ Dar de Alta</button>
 </div>
 
-<div class="card shadow-sm">
+<div class="card shadow-sm border-0">
     <div class="table-responsive">
         <table class="table table-striped mb-0">
             <thead class="table-light"><tr><th>Título</th><th>Descripción</th><th>Prioridad</th><th>Estado</th><th>Fecha</th><th class="text-end">Acciones</th></tr></thead>
@@ -82,11 +81,15 @@ require __DIR__ . '/../includes/layout_top.php';
                 <tr><td colspan="6" class="text-center text-muted py-4">No has enviado reportes.</td></tr>
             <?php else: foreach ($mis_reportes as $r): ?>
                 <tr>
-                    <td><?= htmlspecialchars($r['titulo']) ?></td>
-                    <td><?= htmlspecialchars($r['descripcion']) ?></td>
+                    <td><strong><?= htmlspecialchars($r['titulo']) ?></strong></td>
+                    
+                    <td class="text-muted small" style="max-width: 320px; white-space: normal; word-break: break-all; word-wrap: break-word;">
+                        <?= htmlspecialchars($r['descripcion']) ?>
+                    </td>
+                    
                     <td><span class="badge <?= claseBadgePrioridad($r['prioridad']) ?>"><?= htmlspecialchars($r['prioridad']) ?></span></td>
                     <td><span class="badge <?= claseBadgeReporte($r['estado']) ?>"><?= htmlspecialchars($r['estado']) ?></span></td>
-                    <td><?= htmlspecialchars($r['fecha_creacion']) ?></td>
+                    <td class="small text-secondary"><?= htmlspecialchars($r['fecha_creacion']) ?></td>
                     <td class="text-end">
                         <?php if ($r['estado'] === 'Pendiente'): ?>
                             <form method="post" action="reportes.php" onsubmit="return confirm('¿Cancelar este reporte?');">
@@ -107,12 +110,12 @@ require __DIR__ . '/../includes/layout_top.php';
 
 <!-- MODAL: DAR DE ALTA reporte -->
 <div class="modal fade" id="modalNuevoReporte" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <form method="post" action="reportes.php">
                 <input type="hidden" name="accion" value="crear_reporte">
                 <div class="modal-header">
-                    <h5 class="modal-title">➕ Nuevo reporte de mantenimiento</h5>
+                    <h5 class="modal-title fw-bold">➕ Nuevo reporte de mantenimiento</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -134,8 +137,8 @@ require __DIR__ . '/../includes/layout_top.php';
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <button type="submit" class="btn btn-primary">Enviar reporte</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary btn-sm fw-bold" style="background-color: #3b82f6;">Enviar reporte</button>
                 </div>
             </form>
         </div>

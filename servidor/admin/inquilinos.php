@@ -26,8 +26,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
             || $username_nuevo === '' || strlen($password_nuevo) < 8) {
             $form_error = 'Completa nombre, cuarto, número de personas, fecha de inicio, usuario y una contraseña de al menos 8 caracteres.';
         } else {
+            registrar_evento_acid('warning', "🔒 [LOCK] Solicitando bloqueo exclusivo del cuarto_id #$cuarto_id para registrar al inquilino.");
             mysqli_begin_transaction($conn);
             try {
+                $stmt = mysqli_prepare($conn, 'SELECT estado FROM cuartos WHERE cuarto_id = ? FOR UPDATE');
+                mysqli_stmt_bind_param($stmt, 'i', $cuarto_id);
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new RuntimeException('No fue posible verificar el cuarto seleccionado.');
+                }
+                $res_cuarto = mysqli_stmt_get_result($stmt);
+                $fila_cuarto = $res_cuarto ? mysqli_fetch_assoc($res_cuarto) : null;
+                mysqli_stmt_close($stmt);
+                if (!$fila_cuarto || $fila_cuarto['estado'] !== 'Disponible') {
+                    throw new RuntimeException('Ese cuarto ya no está disponible.');
+                }
+
                 $hash = password_hash($password_nuevo, PASSWORD_DEFAULT);
                 $stmt = mysqli_prepare($conn, "INSERT INTO usuarios (username, password_hash, rol) VALUES (?, ?, 'inquilino')");
                 mysqli_stmt_bind_param($stmt, 'ss', $username_nuevo, $hash);
@@ -47,13 +60,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
                 $estado_ocupado = 'Ocupado';
                 $stmt = mysqli_prepare($conn, 'UPDATE cuartos SET estado = ? WHERE cuarto_id = ?');
                 mysqli_stmt_bind_param($stmt, 'si', $estado_ocupado, $cuarto_id);
-                mysqli_stmt_execute($stmt);
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new RuntimeException('No fue posible actualizar el estado del cuarto.');
+                }
                 mysqli_stmt_close($stmt);
 
                 mysqli_commit($conn);
+                registrar_evento_acid('success', "🚀 [COMMIT] Inquilino \"$nombre_completo\", expediente y cuarto #$cuarto_id guardados correctamente.");
+                registrar_evento_acid('info', '🔓 [UNLOCK] Bloqueos liberados al confirmar la transacción.');
                 $form_success = "Inquilino \"$nombre_completo\" registrado correctamente.";
             } catch (RuntimeException $e) {
                 mysqli_rollback($conn);
+                registrar_evento_acid('danger', '💥 [ROLLBACK] Alta cancelada: ' . $e->getMessage());
+                registrar_evento_acid('info', '🔓 [UNLOCK] Bloqueos liberados al revertir la transacción.');
                 $form_error = $e->getMessage();
             }
         }
@@ -70,12 +89,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
         if ($inquilino_id <= 0 || $nombre_completo === '' || $personas <= 0) {
             $form_error = 'Selecciona un inquilino válido, verifica el nombre y el número de personas.';
         } else {
+            registrar_evento_acid('warning', "🔒 [LOCK] Solicitando bloqueo exclusivo del inquilino_id #$inquilino_id para actualizar sus datos.");
             $fecha_fin_valor = $fecha_fin !== '' ? $fecha_fin : null;
-            $stmt = mysqli_prepare($conn, 'UPDATE inquilinos SET nombre_completo = ?, telefono = ?, personas = ?, fecha_fin_contrato = ? WHERE inquilino_id = ?');
-            mysqli_stmt_bind_param($stmt, 'ssisi', $nombre_completo, $telefono, $personas, $fecha_fin_valor, $inquilino_id);
-            mysqli_stmt_execute($stmt);
-            mysqli_stmt_close($stmt);
-            $form_success = 'Datos del inquilino actualizados / contrato renovado.';
+            mysqli_begin_transaction($conn);
+            try {
+                $stmt = mysqli_prepare($conn, 'UPDATE inquilinos SET nombre_completo = ?, telefono = ?, personas = ?, fecha_fin_contrato = ? WHERE inquilino_id = ?');
+                mysqli_stmt_bind_param($stmt, 'ssisi', $nombre_completo, $telefono, $personas, $fecha_fin_valor, $inquilino_id);
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new RuntimeException('No fue posible actualizar los datos del inquilino.');
+                }
+                mysqli_stmt_close($stmt);
+                mysqli_commit($conn);
+                registrar_evento_acid('success', "🚀 [COMMIT] Datos del inquilino_id #$inquilino_id actualizados correctamente.");
+                registrar_evento_acid('info', '🔓 [UNLOCK] Bloqueo liberado al confirmar la transacción.');
+                $form_success = 'Datos del inquilino actualizados / contrato renovado.';
+            } catch (RuntimeException $e) {
+                mysqli_rollback($conn);
+                registrar_evento_acid('danger', '💥 [ROLLBACK] Actualización cancelada: ' . $e->getMessage());
+                registrar_evento_acid('info', '🔓 [UNLOCK] Bloqueo liberado al revertir la transacción.');
+                $form_error = $e->getMessage();
+            }
         }
     }
 
@@ -83,30 +116,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
     if ($_POST['accion'] === 'baja_inquilino') {
         $inquilino_id = (int)($_POST['inquilino_id'] ?? 0);
         if ($inquilino_id > 0) {
-            $stmt = mysqli_prepare($conn, 'SELECT cuarto_id FROM inquilinos WHERE inquilino_id = ?');
-            mysqli_stmt_bind_param($stmt, 'i', $inquilino_id);
-            mysqli_stmt_execute($stmt);
-            $res  = mysqli_stmt_get_result($stmt);
-            $fila = $res ? mysqli_fetch_assoc($res) : null;
-            mysqli_stmt_close($stmt);
+            if (session_status() === PHP_SESSION_NONE) session_start();
+            $acid_logs = [
+                ['tipo' => 'warning', 'msg' => "🔒 [LOCK] Solicitando bloqueo exclusivo del inquilino_id #$inquilino_id para darlo de baja."],
+                ['tipo' => 'info', 'msg' => '⚙️ [TRANSACTION] Conservando el historial y liberando el cuarto asociado.']
+            ];
+            mysqli_begin_transaction($conn);
+            try {
+                $stmt = mysqli_prepare($conn, 'SELECT cuarto_id FROM inquilinos WHERE inquilino_id = ? FOR UPDATE');
+                mysqli_stmt_bind_param($stmt, 'i', $inquilino_id);
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new RuntimeException('No fue posible localizar al inquilino.');
+                }
+                $res  = mysqli_stmt_get_result($stmt);
+                $fila = $res ? mysqli_fetch_assoc($res) : null;
+                mysqli_stmt_close($stmt);
 
-            if ($fila) {
+                if (!$fila) {
+                    throw new RuntimeException('El inquilino seleccionado no existe.');
+                }
+
                 // No se borra el registro: se marca Inactivo para conservar el historial.
                 $stmt = mysqli_prepare($conn, 'UPDATE inquilinos SET activo = 0, fecha_fin_contrato = CURDATE() WHERE inquilino_id = ?');
                 mysqli_stmt_bind_param($stmt, 'i', $inquilino_id);
-                mysqli_stmt_execute($stmt);
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new RuntimeException('No fue posible dar de baja al inquilino.');
+                }
                 mysqli_stmt_close($stmt);
 
                 $estado_disponible = 'Disponible';
                 $stmt = mysqli_prepare($conn, 'UPDATE cuartos SET estado = ? WHERE cuarto_id = ?');
                 mysqli_stmt_bind_param($stmt, 'si', $estado_disponible, $fila['cuarto_id']);
-                mysqli_stmt_execute($stmt);
+                if (!mysqli_stmt_execute($stmt)) {
+                    throw new RuntimeException('No fue posible liberar el cuarto asociado.');
+                }
                 mysqli_stmt_close($stmt);
+                mysqli_commit($conn);
+                $acid_logs[] = ['tipo' => 'success', 'msg' => "🚀 [COMMIT] Baja del inquilino_id #$inquilino_id y disponibilidad del cuarto confirmadas."];
+                $acid_logs[] = ['tipo' => 'dark', 'msg' => '🔓 [UNLOCK] Bloqueos liberados al finalizar la transacción.'];
+            } catch (RuntimeException $e) {
+                mysqli_rollback($conn);
+                $acid_logs[] = ['tipo' => 'danger', 'msg' => '💥 [ROLLBACK] Baja cancelada: ' . $e->getMessage()];
+                $acid_logs[] = ['tipo' => 'info', 'msg' => '🔓 [UNLOCK] Bloqueos liberados al revertir la transacción.'];
             }
+            $_SESSION['acid_logs'] = $acid_logs;
         }
         header('Location: inquilinos.php');
         exit;
     }
+}
+
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (isset($_SESSION['acid_logs']) && is_array($_SESSION['acid_logs'])) {
+    foreach ($_SESSION['acid_logs'] as $log) {
+        registrar_evento_acid($log['tipo'], $log['msg']);
+    }
+    unset($_SESSION['acid_logs']);
 }
 
 // ==============================================================================

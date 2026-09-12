@@ -14,6 +14,23 @@
  * ------------------------------------------------------------------
  */
 
+if (!isset($GLOBALS['trazabilidad_acid'])) {
+    $GLOBALS['trazabilidad_acid'] = [];
+}
+
+/**
+ * Función global para registrar eventos de concurrencia en tiempo real
+ */
+function registrar_evento_acid($tipo, $mensaje) {
+    $GLOBALS['trazabilidad_acid'][] = [
+        'tipo' => $tipo, // success, danger, warning, info
+        'msg'  => $mensaje
+    ];
+}
+
+
+
+
 require_once __DIR__ . '/db.php';
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -69,45 +86,62 @@ function require_login(?string $rol_requerido = null): array
  * Verifica usuario/contraseña e inicia sesión (con rotación de token).
  * Devuelve null si el login fue exitoso, o un mensaje de error si no.
  */
-function attempt_login(string $username, string $password): ?string
-{
+/**
+ * Intenta autenticar a un usuario en el sistema.
+ * Versión blindada: Bloquea el acceso a inquilinos dados de baja (activo = 0).
+ */
+function attempt_login($username, $password) {
     $conn = get_conn();
-    $stmt = mysqli_prepare($conn, 'SELECT id, username, password_hash, rol FROM usuarios WHERE username = ? LIMIT 1');
+    
+    //UNIFICACIÓN DE SEGURIDAD: Traemos los datos del usuario y el estado del inquilino
+    $stmt = mysqli_prepare($conn, "
+        SELECT u.id, u.username, u.password_hash, u.rol, i.activo 
+        FROM usuarios u
+        LEFT JOIN inquilinos i ON u.id = i.usuario_id
+        WHERE u.username = ?
+    ");
+    
     mysqli_stmt_bind_param($stmt, 's', $username);
     mysqli_stmt_execute($stmt);
-    $res     = mysqli_stmt_get_result($stmt);
-    $usuario = $res ? mysqli_fetch_assoc($res) : null;
+    $res = mysqli_stmt_get_result($stmt);
+    $user = mysqli_fetch_assoc($res);
     mysqli_stmt_close($stmt);
 
-    if (!$usuario || !password_verify($password, $usuario['password_hash'])) {
+    // 1. Validar si el usuario existe y si la contraseña coincide matemáticamente
+    if (!$user || !password_verify($password, $user['password_hash'])) {
         return 'Usuario o contraseña incorrectos.';
     }
 
-    // Nuevo token: cualquier sesión anterior de este usuario queda invalidada.
+    // 2. EL CANDADO REALISTA: Si es inquilino y su estado es inactivo (0), se le prohíbe el paso
+    if ($user['rol'] === 'inquilino' && $user['activo'] == 0) {
+        return 'Esta cuenta ha sido desactivada por término de contrato o baja administrativa.';
+    }
+
+    // 3. Si pasa los filtros, se regenera el token de sesión única (El último en llegar gana)
     $token = bin2hex(random_bytes(32));
-    $stmt  = mysqli_prepare($conn, 'UPDATE usuarios SET session_token = ? WHERE id = ?');
-    mysqli_stmt_bind_param($stmt, 'si', $token, $usuario['id']);
+    $u_id = (int)$user['id'];
+    
+    $stmt = mysqli_prepare($conn, 'UPDATE usuarios SET session_token = ? WHERE id = ?');
+    mysqli_stmt_bind_param($stmt, 'si', $token, $u_id);
     mysqli_stmt_execute($stmt);
     mysqli_stmt_close($stmt);
 
-    session_regenerate_id(true);
-    $_SESSION['usuario_id']    = $usuario['id'];
-    $_SESSION['username']      = $usuario['username'];
-    $_SESSION['rol']           = $usuario['rol'];
+    // Guardar datos limpios en la sesión global de PHP
+    $_SESSION['usuario_id']   = $user['id'];
+    $_SESSION['username']     = $user['username'];
+    $_SESSION['rol']          = $user['rol'];
     $_SESSION['session_token'] = $token;
 
-    if ($usuario['rol'] === 'inquilino') {
-        $stmt = mysqli_prepare($conn, 'SELECT inquilino_id FROM inquilinos WHERE usuario_id = ? LIMIT 1');
-        mysqli_stmt_bind_param($stmt, 'i', $usuario['id']);
-        mysqli_stmt_execute($stmt);
-        $res  = mysqli_stmt_get_result($stmt);
-        $fila = $res ? mysqli_fetch_assoc($res) : null;
-        mysqli_stmt_close($stmt);
-        $_SESSION['inquilino_id'] = $fila['inquilino_id'] ?? null;
+    // Si es inquilino, mapeamos también su ID de expediente de negocio
+    if ($user['rol'] === 'inquilino') {
+        $q_inq = mysqli_query($conn, "SELECT inquilino_id FROM inquilinos WHERE usuario_id = $u_id");
+        $inq_data = mysqli_fetch_assoc($q_inq);
+        $_SESSION['inquilino_id'] = $inq_data ? $inq_data['inquilino_id'] : 0;
     }
 
-    return null;
+    return null; // Éxito total
 }
+
 
 /** Cierra sesión e invalida el token en base de datos. */
 function do_logout(): void

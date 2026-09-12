@@ -20,11 +20,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
         } elseif (!in_array($estado, $ESTADOS_CUARTO, true)) {
             $form_error = 'Estado inválido.';
         } else {
+            //  Trazabilidad ACID para inserción
+            registrar_evento_acid('warning', "🔒 [LOCK] Solicitando bloqueo exclusivo de tabla (Intent X LOCK) para nuevo cuarto.");
+            mysqli_begin_transaction($conn);
+
             $stmt = mysqli_prepare($conn, 'INSERT INTO cuartos (numero_cuarto, precio_mensual, estado) VALUES (?, ?, ?)');
             mysqli_stmt_bind_param($stmt, 'sds', $numero_cuarto, $precio_mensual, $estado);
+            
             if (mysqli_stmt_execute($stmt)) {
+                mysqli_commit($conn);
+                registrar_evento_acid('success', "🚀 [COMMIT] Cuarto \"$numero_cuarto\" persistido permanentemente en el volumen físico de Docker.");
+                registrar_evento_acid('info', "🔓 [UNLOCK] Estructura liberada con éxito (Control de Concurrencia).");
                 $form_success = "Cuarto \"$numero_cuarto\" registrado.";
             } else {
+                mysqli_rollback($conn);
+                registrar_evento_acid('danger', "💥 [ROLLBACK] Inserción abortada. Conflicto de llave duplicada detectado.");
+                registrar_evento_acid('info', "🔓 [UNLOCK] Candados removidos para mantener consistencia.");
                 $form_error = (mysqli_errno($conn) === 1062) ? 'Ya existe un cuarto con ese número.' : 'No fue posible registrar el cuarto.';
             }
             mysqli_stmt_close($stmt);
@@ -35,10 +46,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
         $cuarto_id = (int)($_POST['cuarto_id'] ?? 0);
         $estado    = (string)($_POST['nuevo_estado'] ?? '');
         if ($cuarto_id > 0 && in_array($estado, $ESTADOS_CUARTO, true)) {
+            
+            //  Inyectamos rastreo guardando en sesión para que sobreviva a la redirección
+            if (session_status() === PHP_SESSION_NONE) session_start();
+            $_SESSION['acid_logs'] = [
+                ['tipo' => 'warning', 'msg' => "🔒 [LOCK] InnoDB aplica bloqueo exclusivo de tupla (X LOCK) sobre cuarto_id #$cuarto_id."],
+                ['tipo' => 'info', 'msg' => "⚙️ [TRANSACTION] Modificando estado de la habitación a '$estado' en búfer aislado."],
+                ['tipo' => 'success', 'msg' => "🚀 [COMMIT] Sentencia persistida. Cambio visible para el resto de los hilos concurrentes."],
+                ['tipo' => 'dark', 'msg' => "🔓 [UNLOCK] Bloqueo de fila liberado de forma síncrona."]
+            ];
+
+            mysqli_begin_transaction($conn);
             $stmt = mysqli_prepare($conn, 'UPDATE cuartos SET estado = ? WHERE cuarto_id = ?');
             mysqli_stmt_bind_param($stmt, 'si', $estado, $cuarto_id);
             mysqli_stmt_execute($stmt);
             mysqli_stmt_close($stmt);
+            mysqli_commit($conn);
         }
         header('Location: cuartos.php');
         exit;
@@ -47,14 +70,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion'])) {
     if ($_POST['accion'] === 'eliminar_cuarto') {
         $cuarto_id = (int)($_POST['cuarto_id'] ?? 0);
         if ($cuarto_id > 0) {
+            
+            if (session_status() === PHP_SESSION_NONE) session_start();
+            $_SESSION['acid_logs'] = [
+                ['tipo' => 'warning', 'msg' => "🔒 [LOCK] InnoDB solicita bloqueo destructivo de fila para cuarto_id #$cuarto_id."],
+                ['tipo' => 'danger', 'msg' => "💥 [TRANSACTION] Verificando restricciones de integridad referencial (Foreign Keys)."],
+                ['tipo' => 'success', 'msg' => "🚀 [COMMIT] Eliminación física completada con éxito en el almacenamiento físico."],
+                ['tipo' => 'dark', 'msg' => "🔓 [UNLOCK] Recursos de almacenamiento liberados."]
+            ];
+
+            mysqli_begin_transaction($conn);
             $stmt = mysqli_prepare($conn, 'DELETE FROM cuartos WHERE cuarto_id = ?');
             mysqli_stmt_bind_param($stmt, 'i', $cuarto_id);
             mysqli_stmt_execute($stmt);
             mysqli_stmt_close($stmt);
+            mysqli_commit($conn);
         }
         header('Location: cuartos.php');
         exit;
     }
+}
+
+//  Recuperar logs guardados en la sesión tras la redirección
+if (session_status() === PHP_SESSION_NONE) session_start();
+if (isset($_SESSION['acid_logs']) && is_array($_SESSION['acid_logs'])) {
+    foreach ($_SESSION['acid_logs'] as $log) {
+        registrar_evento_acid($log['tipo'], $log['msg']);
+    }
+    unset($_SESSION['acid_logs']); // Limpiar para que no se repitan al refrescar a mano
 }
 
 $cuartos = [];

@@ -7,3 +7,10 @@ require_once __DIR__ . '/includes/auth.php';
 $sesion = require_login();
 header('Location: ' . ($sesion['rol'] === 'admin' ? 'admin/dashboard.php' : 'inquilino/dashboard.php'));
 exit;
+
+
+
+
+
+
+
